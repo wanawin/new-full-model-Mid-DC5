@@ -23,45 +23,67 @@ def normalize_name(raw_name: str) -> str:
 def parse_manual_filters_txt(raw_text: str):
     """
     Parse raw_text into filter entries.
-    Each block separated by blank lines; expects:
+    Each filter is expected to have:
       <Filter Name>\n
       Type: ...\n
       Logic: ...\n
       Action: ...
-    Returns entries and skipped blocks.
+    But we scan line-by-line: any line not starting with Type:/Logic:/Action: is a new name.
+    Returns: (entries, skipped_blocks)
+      entries: list of dicts {'name':..., 'type':..., 'logic':..., 'action':...}
+      skipped_blocks: list of raw text for blocks missing name
     """
     entries = []
     skipped = []
+    # Normalize line endings
     text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-    # Split on one or more blank lines
-    blocks = re.split(r'\n\s*\n+', text)
-    for blk in blocks:
-        blk = blk.strip()
-        if not blk:
+    lines = text.split("\n")
+    current = None
+    for raw_ln in lines:
+        ln = raw_ln.strip()
+        if not ln:
+            # Blank line: finalize current
+            if current:
+                if current.get('name'):
+                    entries.append(current)
+                else:
+                    skipped.append(current)
+                current = None
             continue
-        lines = [ln.strip() for ln in blk.split("\n") if ln.strip()]
-        name = ''
-        typ = ''
-        logic = ''
-        action = ''
-        for ln in lines:
-            norm_ln = unicodedata.normalize('NFKC', ln)
-            low = norm_ln.lower()
-            if low.startswith('type:'):
-                typ = norm_ln.split(':', 1)[1].strip()
-            elif low.startswith('logic:'):
-                after = norm_ln.split(':', 1)[1].strip()
-                if after.lower().startswith('logic:'):
-                    after = after.split(':', 1)[1].strip()
-                logic = after
-            elif low.startswith('action:'):
-                action = norm_ln.split(':', 1)[1].strip()
-            elif not name:
-                name = norm_ln
-        if name:
-            entries.append({'name': name, 'type': typ, 'logic': logic, 'action': action})
+        norm_ln = unicodedata.normalize('NFKC', ln)
+        low = norm_ln.lower()
+        # Prefix lines
+        if low.startswith('type:'):
+            if current is None:
+                current = {'name': '', 'type': '', 'logic': '', 'action': ''}
+            current['type'] = norm_ln.split(':', 1)[1].strip()
+        elif low.startswith('logic:'):
+            if current is None:
+                current = {'name': '', 'type': '', 'logic': '', 'action': ''}
+            after = norm_ln.split(':', 1)[1].strip()
+            if after.lower().startswith('logic:'):
+                after = after.split(':', 1)[1].strip()
+            current['logic'] = after
+        elif low.startswith('action:'):
+            if current is None:
+                current = {'name': '', 'type': '', 'logic': '', 'action': ''}
+            current['action'] = norm_ln.split(':', 1)[1].strip()
         else:
-            skipped.append(blk)
+            # Name line
+            if current:
+                if current.get('name'):
+                    entries.append(current)
+                else:
+                    skipped.append(current)
+            clean = strip_prefix(norm_ln)
+            name_norm = normalize_name(clean)
+            current = {'name': name_norm, 'type': '', 'logic': '', 'action': ''}
+    # Finalize last
+    if current:
+        if current.get('name'):
+            entries.append(current)
+        else:
+            skipped.append(current)
     return entries, skipped
 
 # ==============================
@@ -113,7 +135,6 @@ def apply_conditional_seed_contains(combos, seed_digits, seed_digit, required_wi
 # Generate combinations (placeholder)
 # ==============================
 def generate_combinations(seed, method="2-digit pair"):
-    # Implement your combo generation
     all_digits = '0123456789'
     combos = set()
     seed_str = str(seed)
@@ -170,7 +191,6 @@ if raw_manual:
         with st.expander("Skipped blocks"):
             for sb in skipped:
                 st.code(sb[:300] + ("..." if len(sb)>300 else ""))
-    # Debug normalized names
     if st.sidebar.checkbox("Show normalized filter names for debugging"):
         for pf in parsed_entries:
             raw_name = pf['name']
@@ -192,10 +212,8 @@ if seed:
         key = f"filter_{idx}"
         checked = st.sidebar.checkbox(label, key=key)
         if checked:
-            # Attempt to match known patterns in pf['logic']
             logic = pf.get('logic', '')
-            # Example pattern checks:
-            # 1) sum-range elimination: "Eliminate if sum <X or >Y"
+            # sum-range elimination: "Eliminate if sum <X or >Y"
             m_sum = re.search(r'sum\s*<\s*(\d+)\s*or\s*>\s*(\d+)', logic, re.IGNORECASE)
             if m_sum:
                 low, high = int(m_sum.group(1)), int(m_sum.group(2))
@@ -203,7 +221,7 @@ if seed:
                 session_pool = keep
                 st.write(f"Filter '{label}' removed {len(removed)} combos.")
                 continue
-            # 2) keep-sum-range if seed-sum condition: "digit sum between X and Y if seed sum is ..."
+            # keep-sum-range if seed-sum condition
             m_keep = re.search(r'between\s*(\d+)\s*and\s*(\d+).*if the seed sum is\s*([≤>=\d\s\-orhigher–]+)', logic, re.IGNORECASE)
             if m_keep:
                 low, high = int(m_keep.group(1)), int(m_keep.group(2))
@@ -213,7 +231,7 @@ if seed:
                 session_pool = keep
                 st.write(f"Filter '{label}' removed {len(removed)} combos.")
                 continue
-            # 3) conditional seed contains: "Eliminate if seed contains D and winner contains neither X nor Y"
+            # conditional seed contains
             m_cond = re.search(r'seed contains\s*(\d+)\s*.*contains neither\s*([\d,\s]+)', logic, re.IGNORECASE)
             if m_cond:
                 sd = int(m_cond.group(1))
@@ -223,15 +241,13 @@ if seed:
                 session_pool = keep
                 st.write(f"Filter '{label}' removed {len(removed)} combos.")
                 continue
-            # Add more pattern handlers here as needed.
-            # If no pattern matched:
             st.warning(f"Could not automatically apply filter logic for: '{label}'")
     st.write(f"**Remaining combos after manual filters:** {len(session_pool)}")
     with st.expander("Show remaining combinations"):
         for c in session_pool:
             st.write(c)
 
-# Trap V3 Ranking (if implemented separately)
+# Trap V3 Ranking
 if enable_trap and seed and session_pool:
     try:
         import dc5_trapv3_model as trap_model
