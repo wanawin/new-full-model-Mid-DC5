@@ -163,24 +163,43 @@ cold_digits = [d for d in st.sidebar.text_input("Cold digits (comma-separated):"
 due_digits = [d for d in st.sidebar.text_input("Due digits (comma-separated):").replace(' ', '').split(',') if d]
 method = st.sidebar.selectbox("Generation Method:", ["1-digit", "2-digit pair"]) 
 enable_trap = st.sidebar.checkbox("Enable Trap V3 Ranking")
-# Upload or use combined file
+# Upload or use combined file or fallbacks
 uploaded = st.sidebar.file_uploader("Upload manual filters file (TXT)", type=['txt'])
-combined_path = "manual_filters_combined.txt"
 raw_manual = None
+# Try uploaded
 if uploaded is not None:
     try:
         raw_manual = uploaded.read().decode('utf-8', errors='ignore')
         st.sidebar.success("Loaded uploaded manual filters file.")
     except Exception as e:
         st.sidebar.error(f"Failed reading uploaded file: {e}")
-elif os.path.exists(combined_path):
-    try:
-        raw_manual = open(combined_path, 'r', encoding='utf-8').read()
-        st.sidebar.info(f"Loaded manual filters from {combined_path}")
-    except Exception as e:
-        st.sidebar.error(f"Failed reading {combined_path}: {e}")
 else:
-    st.sidebar.warning(f"No manual_filters_combined.txt found. Upload a TXT.")
+    # Search for possible filter files in cwd
+    candidates = ["manual_filters_combined.txt", "manual_filters_full.txt", "manual_filters_degrouped.txt", "working_108_filters.txt"]
+    found = []
+    for fname in candidates:
+        if os.path.exists(fname):
+            found.append(fname)
+    if len(found) > 1:
+        # Combine contents
+        contents = []
+        for fname in found:
+            try:
+                txt = open(fname, 'r', encoding='utf-8').read()
+                contents.append(txt)
+                st.sidebar.info(f"Loaded manual filters from {fname}")
+            except Exception as e:
+                st.sidebar.error(f"Failed reading {fname}: {e}")
+        raw_manual = "\n\n".join(contents)
+    elif len(found) == 1:
+        fname = found[0]
+        try:
+            raw_manual = open(fname, 'r', encoding='utf-8').read()
+            st.sidebar.info(f"Loaded manual filters from {fname}")
+        except Exception as e:
+            st.sidebar.error(f"Failed reading {fname}: {e}")
+    else:
+        st.sidebar.warning("No manual filter file found (looked for combined/full/degrouped/working_108). Upload a TXT.")
 
 parsed_entries = []
 if raw_manual:
