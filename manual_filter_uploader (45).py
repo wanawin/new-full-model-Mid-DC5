@@ -232,15 +232,13 @@ if seed:
         st.sidebar.markdown("### Manual Filter Selection")
     for idx, pf in enumerate(parsed_entries):
         label = pf['name'] or f"Filter {idx}"
-        key = f"filter_{idx}"
+        help_text = f"Type: {pf.get('type', '')}\nLogic: {pf.get('logic', '')}\nAction: {pf.get('action', '')}"
         try:
-            checked = st.sidebar.checkbox(label, key=key)
+            checked = st.sidebar.checkbox(label, key=f"filter_{idx}", help=help_text)
         except Exception:
-            checked = st.sidebar.checkbox(f"Filter {idx}", key=key)
+            checked = st.sidebar.checkbox(f"Filter {idx}", key=f"filter_{idx}", help=help_text)
         if checked:
             logic = pf.get('logic', '')
-            # Debug: show logic
-            # st.write(f"Applying '{label}' logic: {logic}")
             # sum-range elimination: "Eliminate if sum <X or >Y"
             m_sum = re.search(r'sum\s*<\s*(\d+)\s*or\s*>\s*(\d+)', logic, re.IGNORECASE)
             if m_sum:
