@@ -1,131 +1,246 @@
 import streamlit as st
+import os, unicodedata, re
 from itertools import product, combinations
-import os
-import re
-import unicodedata
 
 # ==============================
-# BOOT CHECKPOINT
-# ==============================
-st.title("🤪 DC-5 Midday Filter App")
-st.success("✅ App loaded: Boot successful.")
-
-# ==============================
-# Manual Filter Parsing
-# ==============================
-def parse_manual_filters_txt(raw_text: str):
-    entries = []
-    skipped_blocks = []
-    blocks = [blk.strip() for blk in raw_text.strip().split("\n\n") if blk.strip()]
-    for blk in blocks:
-        lines = [ln.strip() for ln in blk.splitlines() if ln.strip()]
-        name, typ, logic, action = '', '', '', ''
-        for i, line in enumerate(lines):
-            norm_line = unicodedata.normalize('NFKC', line)
-            if norm_line.lower().startswith("type:"):
-                typ = norm_line.split(":", 1)[1].strip()
-            elif norm_line.lower().startswith("logic:"):
-                logic = norm_line.split(":", 1)[1].strip()
-            elif norm_line.lower().startswith("action:"):
-                action = norm_line.split(":", 1)[1].strip()
-            elif not name and i == 0:
-                name = norm_line
-        if name:
-            entries.append({"name": name, "type": typ, "logic": logic, "action": action})
-        else:
-            skipped_blocks.append(blk)
-    return entries, skipped_blocks
-
-# ==============================
-# Helper: Normalize and Strip Names
+# Helper functions for parsing manual filters
 # ==============================
 def strip_prefix(raw_name: str) -> str:
+    # Remove leading numbering like "1. ", "10) ", etc.
     return re.sub(r'^\s*\d+[\.\)]\s*', '', raw_name).strip()
 
 def normalize_name(raw_name: str) -> str:
     s = unicodedata.normalize('NFKC', raw_name)
-    s = s.replace('≥', '>=').replace('≤', '<=')
-    s = s.replace('\u2265', '>=')
-    s = s.replace('\u2264', '<=')
+    # Replace common unicode symbols
+    s = s.replace('≥', '>=').replace('≤', '<=').replace('\u2265', '>=').replace('\u2264', '<=')
     s = s.replace('→', '->').replace('\u2192', '->')
     s = s.replace('–', '-').replace('—', '-')
+    # Remove zero-width or NBSP
     s = s.replace('\u200B', '').replace('\u00A0', ' ')
     s = re.sub(r'\s+', ' ', s)
-    return s.strip().lower()
+    return s.strip()
 
-# ==============================
-# Load Manual Filters
-# ==============================
-manual_txt_path = "manual_filters_full.txt"
-if os.path.exists(manual_txt_path):
-    raw_txt = open(manual_txt_path, 'r').read()
-    st.info(f"Loaded raw manual filters from {manual_txt_path}")
-    parsed, skipped = parse_manual_filters_txt(raw_txt)
-    st.text_area("Raw manual filter lines", raw_txt, height=200)
-    st.write(f"Parsed {len(parsed)} manual filter blocks")
-    if skipped:
-        with st.expander(f"⚠️ {len(skipped)} filters skipped due to format issues. Click to view."):
-            for sb in skipped:
-                st.code(sb[:300] + ("..." if len(sb) > 300 else ""))
-
-    # ==============================
-    # Render Parsed Filters as Actionable Toggles
-    # ==============================
-    st.markdown("### 🎯 Manual Filter Selection")
-
-    filter_types = {
-        "hyphen": [],
-        "<": [],
-        "<=": [],
-        ">": [],
-        ">=" : [],
-        "=": [],
-        "seed->winner": [],
-        "shared+sum": [],
-        "spread+sum": [],
-        "mirror+sum": [],
-        "named": [],
-        "unclassified": []
-    }
-
-    for pf in parsed:
-        raw_name = pf['name']
-        stripped = strip_prefix(raw_name)
-        norm = normalize_name(stripped)
-        lower = norm.lower()
-
-        if re.search(r'seed sum\s*(=)?\s*\d+\s*-\s*\d+', lower):
-            filter_types["hyphen"].append(pf)
-        elif re.search(r'seed sum\s*<=\s*\d+', lower):
-            filter_types["<="].append(pf)
-        elif re.search(r'seed sum\s*<\s*\d+', lower):
-            filter_types["<"].append(pf)
-        elif re.search(r'seed sum\s*>=\s*\d+', lower):
-            filter_types[">="].append(pf)
-        elif re.search(r'seed sum\s*>\s*\d+', lower):
-            filter_types[">"].append(pf)
-        elif re.search(r'seed sum\s*=\s*\d+', lower):
-            filter_types["="].append(pf)
-        elif 'seed contains' in lower and 'winner must contain' in lower:
-            filter_types["seed->winner"].append(pf)
-        elif 'shared digits' in lower and 'sum' in lower:
-            filter_types["shared+sum"].append(pf)
-        elif 'digit spread' in lower and 'sum' in lower:
-            filter_types["spread+sum"].append(pf)
-        elif 'mirror count' in lower and 'sum' in lower:
-            filter_types["mirror+sum"].append(pf)
-        elif any(tag in lower for tag in ["digit spread", "mirror", "prime", "v-trac", "repeating digit", "consecutive"]):
-            filter_types["named"].append(pf)
-        else:
-            filter_types["unclassified"].append(pf)
-
-    for group, flist in filter_types.items():
-        if not flist:
+def parse_manual_filters_txt(raw_text: str):
+    """
+    Parse raw_text into filter entries.
+    Each block separated by blank lines; expects:
+      <Filter Name>\n
+      Type: ...\n
+      Logic: ...\n
+      Action: ...
+    Returns entries and skipped blocks.
+    """
+    entries = []
+    skipped = []
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    # Split on one or more blank lines
+    blocks = re.split(r'\n\s*\n+', text)
+    for blk in blocks:
+        blk = blk.strip()
+        if not blk:
             continue
-        st.markdown(f"#### 🧮 Filter Type: `{group}` ({len(flist)} filters)")
-        for f in flist:
-            label = strip_prefix(f['name'])
-            key = f"filter_{normalize_name(label)}"
-            st.checkbox(label, value=False, key=key)
+        lines = [ln.strip() for ln in blk.split("\n") if ln.strip()]
+        name = ''
+        typ = ''
+        logic = ''
+        action = ''
+        for ln in lines:
+            norm_ln = unicodedata.normalize('NFKC', ln)
+            low = norm_ln.lower()
+            if low.startswith('type:'):
+                typ = norm_ln.split(':', 1)[1].strip()
+            elif low.startswith('logic:'):
+                after = norm_ln.split(':', 1)[1].strip()
+                if after.lower().startswith('logic:'):
+                    after = after.split(':', 1)[1].strip()
+                logic = after
+            elif low.startswith('action:'):
+                action = norm_ln.split(':', 1)[1].strip()
+            elif not name:
+                name = norm_ln
+        if name:
+            entries.append({'name': name, 'type': typ, 'logic': logic, 'action': action})
+        else:
+            skipped.append(blk)
+    return entries, skipped
+
+# ==============================
+# Example filter application functions (to extend as needed)
+# ==============================
+def seed_sum_matches_condition(seed_sum: int, condition_str: str) -> bool:
+    s = condition_str.strip()
+    # ≤ or <=
+    m = re.match(r'[≤<=]\s*(\d+)', s)
+    if m:
+        num = int(m.group(1)); return seed_sum <= num
+    # ≥ or >= or "or higher"
+    m = re.match(r'(?:≥|>=)?\s*(\d+)\s*or\s*higher', s, re.IGNORECASE)
+    if m:
+        num = int(m.group(1)); return seed_sum >= num
+    # range low–high or low-high
+    m = re.match(r'(\d+)\s*[–-]\s*(\d+)', s)
+    if m:
+        low, high = int(m.group(1)), int(m.group(2)); return low <= seed_sum <= high
+    # exact
+    if s.isdigit(): return seed_sum == int(s)
+    return False
+
+def apply_sum_range_filter(combos, min_sum, max_sum):
+    keep = [c for c in combos if min_sum <= sum(int(d) for d in c) <= max_sum]
+    removed = [c for c in combos if c not in keep]
+    return keep, removed
+
+def apply_keep_sum_range_if_seed_sum(combos, seed_sum, min_sum, max_sum, seed_condition_str):
+    if seed_sum_matches_condition(seed_sum, seed_condition_str):
+        return apply_sum_range_filter(combos, min_sum, max_sum)
+    else:
+        return combos, []
+
+def apply_conditional_seed_contains(combos, seed_digits, seed_digit, required_winners):
+    if seed_digit in seed_digits:
+        keep = []
+        removed = []
+        for c in combos:
+            if any(str(d) in c for d in required_winners):
+                keep.append(c)
+            else:
+                removed.append(c)
+        return keep, removed
+    else:
+        return combos, []
+
+# ==============================
+# Generate combinations (placeholder)
+# ==============================
+def generate_combinations(seed, method="2-digit pair"):
+    # Implement your combo generation
+    all_digits = '0123456789'
+    combos = set()
+    seed_str = str(seed)
+    if method == "1-digit":
+        for d in seed_str:
+            for p in product(all_digits, repeat=4):
+                combo = ''.join(sorted(d + ''.join(p)))
+                combos.add(combo)
+    else:
+        pairs = set(''.join(sorted((seed_str[i], seed_str[j])))
+                    for i in range(len(seed_str)) for j in range(i+1, len(seed_str)))
+        for pair in pairs:
+            for p in product(all_digits, repeat=3):
+                combo = ''.join(sorted(pair + ''.join(p)))
+                combos.add(combo)
+    return sorted(combos)
+
+# ==============================
+# Streamlit App
+# ==============================
+st.title("DC-5 Midday Blind Predictor with Combined Filters")
+# Sidebar inputs
+seed = st.sidebar.text_input("5-digit seed:")
+hot_digits = [d for d in st.sidebar.text_input("Hot digits (comma-separated):").replace(' ', '').split(',') if d]
+cold_digits = [d for d in st.sidebar.text_input("Cold digits (comma-separated):").replace(' ', '').split(',') if d]
+due_digits = [d for d in st.sidebar.text_input("Due digits (comma-separated):").replace(' ', '').split(',') if d]
+method = st.sidebar.selectbox("Generation Method:", ["1-digit", "2-digit pair"]) 
+enable_trap = st.sidebar.checkbox("Enable Trap V3 Ranking")
+# Upload or use combined file
+uploaded = st.sidebar.file_uploader("Upload manual filters file (TXT)", type=['txt'])
+combined_path = "manual_filters_combined.txt"
+raw_manual = None
+if uploaded is not None:
+    try:
+        raw_manual = uploaded.read().decode('utf-8', errors='ignore')
+        st.sidebar.success("Loaded uploaded manual filters file.")
+    except Exception as e:
+        st.sidebar.error(f"Failed reading uploaded file: {e}")
+elif os.path.exists(combined_path):
+    try:
+        raw_manual = open(combined_path, 'r', encoding='utf-8').read()
+        st.sidebar.info(f"Loaded manual filters from {combined_path}")
+    except Exception as e:
+        st.sidebar.error(f"Failed reading {combined_path}: {e}")
 else:
-    st.error("manual_filters_full.txt not found.")
+    st.sidebar.warning(f"No manual_filters_combined.txt found. Upload a TXT.")
+
+parsed_entries = []
+if raw_manual:
+    parsed_entries, skipped = parse_manual_filters_txt(raw_manual)
+    st.write(f"Parsed {len(parsed_entries)} manual filter blocks")
+    if skipped:
+        st.warning(f"{len(skipped)} blocks skipped due to missing name. Expand to view.")
+        with st.expander("Skipped blocks"):
+            for sb in skipped:
+                st.code(sb[:300] + ("..." if len(sb)>300 else ""))
+    # Debug normalized names
+    if st.sidebar.checkbox("Show normalized filter names for debugging"):
+        for pf in parsed_entries:
+            raw_name = pf['name']
+            label = strip_prefix(raw_name)
+            norm = normalize_name(label).lower()
+            st.write(f"DEBUG: '{raw_name}' -> '{norm}'")
+else:
+    st.write("No manual filters loaded.")
+
+# When seed provided, generate combos
+session_pool = []
+if seed:
+    combos_initial = generate_combinations(seed, method)
+    session_pool = combos_initial.copy()
+    st.write(f"Generated {len(combos_initial)} combos before manual filters.")
+    # Apply selected manual filters
+    for idx, pf in enumerate(parsed_entries):
+        label = strip_prefix(pf['name'])
+        key = f"filter_{idx}"
+        checked = st.sidebar.checkbox(label, key=key)
+        if checked:
+            # Attempt to match known patterns in pf['logic']
+            logic = pf.get('logic', '')
+            # Example pattern checks:
+            # 1) sum-range elimination: "Eliminate if sum <X or >Y"
+            m_sum = re.search(r'sum\s*<\s*(\d+)\s*or\s*>\s*(\d+)', logic, re.IGNORECASE)
+            if m_sum:
+                low, high = int(m_sum.group(1)), int(m_sum.group(2))
+                keep, removed = apply_sum_range_filter(session_pool, low, high)
+                session_pool = keep
+                st.write(f"Filter '{label}' removed {len(removed)} combos.")
+                continue
+            # 2) keep-sum-range if seed-sum condition: "digit sum between X and Y if seed sum is ..."
+            m_keep = re.search(r'between\s*(\d+)\s*and\s*(\d+).*if the seed sum is\s*([≤>=\d\s\-orhigher–]+)', logic, re.IGNORECASE)
+            if m_keep:
+                low, high = int(m_keep.group(1)), int(m_keep.group(2))
+                seed_cond = m_keep.group(3).strip()
+                seed_sum = sum(int(d) for d in seed)
+                keep, removed = apply_keep_sum_range_if_seed_sum(session_pool, seed_sum, low, high, seed_cond)
+                session_pool = keep
+                st.write(f"Filter '{label}' removed {len(removed)} combos.")
+                continue
+            # 3) conditional seed contains: "Eliminate if seed contains D and winner contains neither X nor Y"
+            m_cond = re.search(r'seed contains\s*(\d+)\s*.*contains neither\s*([\d,\s]+)', logic, re.IGNORECASE)
+            if m_cond:
+                sd = int(m_cond.group(1))
+                reqs = [int(x) for x in re.findall(r'(\d)', m_cond.group(2))]
+                seed_digits = [int(d) for d in seed]
+                keep, removed = apply_conditional_seed_contains(session_pool, seed_digits, sd, reqs)
+                session_pool = keep
+                st.write(f"Filter '{label}' removed {len(removed)} combos.")
+                continue
+            # Add more pattern handlers here as needed.
+            # If no pattern matched:
+            st.warning(f"Could not automatically apply filter logic for: '{label}'")
+    st.write(f"**Remaining combos after manual filters:** {len(session_pool)}")
+    with st.expander("Show remaining combinations"):
+        for c in session_pool:
+            st.write(c)
+
+# Trap V3 Ranking (if implemented separately)
+if enable_trap and seed and session_pool:
+    try:
+        import dc5_trapv3_model as trap_model
+        ranked = trap_model.rank_combinations(session_pool, str(seed))
+        st.write("## Trap V3 Ranking")
+        st.write("Top combos:")
+        for c in ranked[:20]: st.write(c)
+        if len(ranked) > 20:
+            with st.expander("Show all ranked combos"):
+                for c in ranked: st.write(c)
+    except Exception as e:
+        st.error(f"Trap V3 ranking failed: {e}")
